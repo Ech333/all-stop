@@ -62,6 +62,14 @@ class MessageFormattingTests(unittest.TestCase):
         self.assertIn("maria", msg)
         self.assertIn("reset", msg.lower())
 
+    def test_paused_message_includes_actor_and_reason_and_is_distinguishable_from_tripped(self):
+        event = BroadcastEvent(kind="paused", reason="reviewing a suspicious tool call", actor="erik", at="2026-01-01T00:00:00Z")
+        msg = _message_for(event)
+        self.assertIn("erik", msg)
+        self.assertIn("reviewing a suspicious tool call", msg)
+        self.assertIn("PAUSED", msg)
+        self.assertNotIn("TRIPPED", msg)
+
 
 class PayloadShapeTests(unittest.TestCase):
     def test_slack_url_gets_text_field(self):
@@ -80,6 +88,11 @@ class PayloadShapeTests(unittest.TestCase):
         self.assertEqual(payload["event"], "kill_switch_tripped")
         self.assertEqual(payload["actor"], "erik")
         self.assertNotIn("text", payload)
+
+    def test_paused_event_gets_its_own_distinct_event_name(self):
+        event = BroadcastEvent(kind="paused", reason="x", actor="erik", at="t")
+        payload = json.loads(_payload_for("https://internal.example.com/hooks/allstop", event))
+        self.assertEqual(payload["event"], "kill_switch_paused")
 
 
 class SendBroadcastTests(unittest.TestCase):

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from all_stop.kill_switch import KillSwitch  # noqa: E402
+from all_stop.kill_switch import STATE_CLEAR, STATE_PAUSED, STATE_TRIPPED, KillSwitch  # noqa: E402
 
 
 class _CapturingHandler(http.server.BaseHTTPRequestHandler):
@@ -121,6 +121,114 @@ class TripAndResetTests(unittest.TestCase):
             self.assertFalse(switch.tripped())
 
 
+class PauseStateTests(unittest.TestCase):
+    """Real gap found and closed 2026-08-29, stated plainly on the product's own site before this
+    fix: "All-Stop is a binary trip/reset today, not a graduated pause" - AIUC-1's C009 asks for a
+    human-in-the-loop pause/redirect distinct from a full technical shutdown. These tests exist to
+    prove `pause()` really is a third, separately-auditable state - not `trip()` with a different
+    label, and not something `tripped()` accidentally also returns True for."""
+
+    def test_pause_sets_paused_true_and_leaves_tripped_false(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            switch.pause("reviewing a suspicious tool call", "erik")
+            self.assertTrue(switch.paused())
+            self.assertFalse(switch.tripped())
+
+    def test_pause_records_reason_actor_and_paused_at(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            status = switch.pause("reviewing a suspicious tool call", "erik")
+            self.assertEqual(status.state, STATE_PAUSED)
+            self.assertEqual(status.reason, "reviewing a suspicious tool call")
+            self.assertEqual(status.actor, "erik")
+            self.assertIsNotNone(status.paused_at)
+
+    def test_a_fresh_switch_is_not_paused(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            self.assertFalse(switch.paused())
+            self.assertEqual(switch.status().state, STATE_CLEAR)
+
+    def test_reset_clears_a_pause(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            switch.pause("reason", "erik")
+            status = switch.reset("erik")
+            self.assertFalse(switch.paused())
+            self.assertEqual(status.state, STATE_CLEAR)
+            self.assertIsNotNone(status.resumed_at)
+
+    def test_reset_from_tripped_does_not_set_resumed_at(self):
+        # resumed_at is specifically "was this cleared from a pause" - a reset from a full trip
+        # is a different thing and must not be conflated with it in the audit trail.
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            switch.trip("reason", "erik")
+            status = switch.reset("erik")
+            self.assertIsNone(status.resumed_at)
+
+    def test_pause_and_trip_are_mutually_exclusive_states(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            switch.trip("incident", "erik")
+            switch.pause("downgrading to review", "erik")
+            self.assertTrue(switch.paused())
+            self.assertFalse(switch.tripped())
+            switch.trip("incident again", "erik")
+            self.assertTrue(switch.tripped())
+            self.assertFalse(switch.paused())
+
+    def test_empty_reason_is_rejected_on_pause(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            with self.assertRaises(ValueError):
+                switch.pause("  ", "erik")
+
+    def test_empty_actor_is_rejected_on_pause(self):
+        with tempfile.TemporaryDirectory() as d:
+            switch = KillSwitch(os.path.join(d, "state.json"))
+            with self.assertRaises(ValueError):
+                switch.pause("reason", "")
+
+    def test_a_second_instance_sees_a_pause_made_by_the_first(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            writer = KillSwitch(path)
+            reader = KillSwitch(path)
+            self.assertFalse(reader.paused())
+            writer.pause("reason", "erik")
+            self.assertTrue(reader.paused())
+
+    def test_a_pre_pause_state_file_with_no_state_key_is_read_as_tripped(self):
+        # Backward compat: a file written by the version of this library that predates `state`
+        # must not silently read back as STATE_CLEAR just because the new key is absent - that
+        # would clear every currently-tripped switch on upgrade.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            Path(path).write_text(
+                json.dumps({
+                    "tripped": True, "reason": "old incident", "actor": "erik",
+                    "tripped_at": "2026-01-01T00:00:00Z", "reset_at": None,
+                }),
+                encoding="utf-8",
+            )
+            switch = KillSwitch(path)
+            self.assertTrue(switch.tripped())
+            self.assertEqual(switch.status().state, STATE_TRIPPED)
+
+    def test_a_pre_pause_clear_state_file_with_no_state_key_is_read_as_clear(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            Path(path).write_text(
+                json.dumps({"tripped": False, "reason": None, "actor": "erik", "tripped_at": None, "reset_at": None}),
+                encoding="utf-8",
+            )
+            switch = KillSwitch(path)
+            self.assertFalse(switch.tripped())
+            self.assertEqual(switch.status().state, STATE_CLEAR)
+
+
 class MultiProcessVisibilityTests(unittest.TestCase):
     """The core promise: a second, independent KillSwitch instance pointed at the same path sees
     a trip made by the first, with no shared in-memory state and no polling loop - just a file
@@ -209,6 +317,14 @@ class WebhookBroadcastTests(unittest.TestCase):
                 switch = KillSwitch(os.path.join(d, "state.json"))  # no webhook at construction
                 switch.trip("incident", "erik", webhook_urls=(srv.url,))
                 self.assertEqual(len(_CapturingHandler.received), 1)
+
+    def test_pause_fires_a_real_http_post_to_the_configured_webhook(self):
+        with tempfile.TemporaryDirectory() as d:
+            with _LocalWebhookServer() as srv:
+                switch = KillSwitch(os.path.join(d, "state.json"), webhook_urls=(srv.url,))
+                switch.pause("reviewing", "erik")
+                self.assertEqual(len(_CapturingHandler.received), 1)
+                self.assertEqual(_CapturingHandler.received[0]["event"], "kill_switch_paused")
 
 
 if __name__ == "__main__":

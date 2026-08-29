@@ -27,7 +27,7 @@ _CHAT_WEBHOOK_MARKERS = ("hooks.slack.com", "webhook.office.com", "discord.com/a
 
 @dataclass(frozen=True)
 class BroadcastEvent:
-    kind: str  # "tripped" or "reset"
+    kind: str  # "tripped", "paused", or "reset"
     reason: str | None
     actor: str
     at: str
@@ -36,8 +36,10 @@ class BroadcastEvent:
 def _message_for(event: BroadcastEvent) -> str:
     if event.kind == "tripped":
         return f"ALL-STOP TRIPPED by {event.actor} at {event.at}: {event.reason}"
+    if event.kind == "paused":
+        return f"All-Stop PAUSED by {event.actor} at {event.at}: {event.reason}"
     return f"All-Stop reset by {event.actor} at {event.at}" + (
-        f" (was tripped: {event.reason})" if event.reason else ""
+        f" (was: {event.reason})" if event.reason else ""
     )
 
 

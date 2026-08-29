@@ -5,13 +5,16 @@ See kill_switch.py and broadcast.py for the real mechanism and its honest scope.
 """
 
 from .broadcast import BroadcastEvent, send_broadcast
-from .kill_switch import KillSwitch, SwitchStatus
+from .kill_switch import STATE_CLEAR, STATE_PAUSED, STATE_TRIPPED, KillSwitch, SwitchStatus
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "KillSwitch",
     "SwitchStatus",
+    "STATE_CLEAR",
+    "STATE_PAUSED",
+    "STATE_TRIPPED",
     "BroadcastEvent",
     "send_broadcast",
     "__version__",

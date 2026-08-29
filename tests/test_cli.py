@@ -45,6 +45,36 @@ class StatusCommandTests(unittest.TestCase):
             code = main(["status", "--evidence", path])
             self.assertEqual(code, 1)
 
+    def test_status_on_a_paused_switch_exits_with_its_own_distinct_code(self):
+        # 2, not 1 - a script/CI gate needs to tell "full stop" and "hold for review" apart, not
+        # just collapse both into a generic nonzero.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            KillSwitch(path).pause("reviewing", "erik")
+            code = main(["status", "--evidence", path])
+            self.assertEqual(code, 2)
+
+
+class PauseCommandTests(unittest.TestCase):
+    def test_pause_exits_zero_on_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            code = main(["pause", "--evidence", path, "--reason", "reviewing", "--actor", "erik"])
+            self.assertEqual(code, 0)
+
+    def test_pause_actually_pauses_the_switch_without_tripping_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            main(["pause", "--evidence", path, "--reason", "reviewing", "--actor", "erik"])
+            self.assertTrue(KillSwitch(path).paused())
+            self.assertFalse(KillSwitch(path).tripped())
+
+    def test_pause_with_empty_reason_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            code = main(["pause", "--evidence", path, "--reason", "  ", "--actor", "erik"])
+            self.assertEqual(code, 1)
+
 
 class ResetCommandTests(unittest.TestCase):
     def test_reset_clears_a_tripped_switch(self):
@@ -54,6 +84,14 @@ class ResetCommandTests(unittest.TestCase):
             code = main(["reset", "--evidence", path, "--actor", "maria"])
             self.assertEqual(code, 0)
             self.assertFalse(KillSwitch(path).tripped())
+
+    def test_reset_clears_a_paused_switch(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            KillSwitch(path).pause("reviewing", "erik")
+            code = main(["reset", "--evidence", path, "--actor", "maria"])
+            self.assertEqual(code, 0)
+            self.assertFalse(KillSwitch(path).paused())
 
     def test_reset_with_empty_actor_exits_nonzero(self):
         with tempfile.TemporaryDirectory() as d:
@@ -69,6 +107,15 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(main(["status", "--evidence", path]), 0)
             self.assertEqual(main(["trip", "--evidence", path, "--reason", "r", "--actor", "a"]), 0)
             self.assertEqual(main(["status", "--evidence", path]), 1)
+            self.assertEqual(main(["reset", "--evidence", path, "--actor", "a"]), 0)
+            self.assertEqual(main(["status", "--evidence", path]), 0)
+
+    def test_full_cycle_pause_then_status_then_reset_then_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            self.assertEqual(main(["status", "--evidence", path]), 0)
+            self.assertEqual(main(["pause", "--evidence", path, "--reason", "r", "--actor", "a"]), 0)
+            self.assertEqual(main(["status", "--evidence", path]), 2)
             self.assertEqual(main(["reset", "--evidence", path, "--actor", "a"]), 0)
             self.assertEqual(main(["status", "--evidence", path]), 0)
 

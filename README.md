@@ -37,12 +37,33 @@ Any guard object can wire this in as one extra check — see the MCP Gateway int
 real example: `McpLifecycleGuard(..., kill_switch=switch)` denies every call while tripped, with
 the trip reason surfaced in the denial.
 
+### Pause — a distinct, softer state (0.2+)
+
+AIUC-1's C009 kill-switch requirement asks for human-in-the-loop pause/redirect "without
+requiring full technical shutdown" — a state distinct from a full trip. `pause()` is that state:
+
+```python
+switch.paused()                                  # True while paused, independent of tripped()
+switch.pause("reviewing a suspicious tool call", actor="erik")
+switch.reset(actor="erik")                       # clears from either paused or tripped
+```
+
+Honest about what this does and doesn't change: every integration in this portfolio
+(`McpLifecycleGuard`, Iron-Thread's `EgressPolicy`) denies a call the same way while paused as
+while tripped, because none of them has a review-queue/redirect mechanism to route a paused call
+to instead — there is no softer *enforcement* yet. What pause buys today is a genuinely distinct,
+separately-timestamped, separately-audited state: your own status/webhook/log output can tell
+"full stop, compromised" apart from "hold for review," even though both currently deny. A
+`kill_switch` object that implements only `tripped()` (the pre-0.2 contract) is completely
+unaffected — `paused()` is checked via `getattr`, never assumed to exist.
+
 ## As a CLI
 
 ```bash
-all-stop trip --evidence killswitch.json --reason "compromised MCP server, investigating" --actor erik --webhook https://hooks.slack.com/services/...
-all-stop status --evidence killswitch.json   # exits non-zero while tripped - usable as a script/CI gate
-all-stop reset --evidence killswitch.json --actor erik
+all-stop trip   --evidence killswitch.json --reason "compromised MCP server, investigating" --actor erik --webhook https://hooks.slack.com/services/...
+all-stop pause  --evidence killswitch.json --reason "reviewing a suspicious tool call" --actor erik
+all-stop status --evidence killswitch.json   # exit code: 0 clear, 1 tripped, 2 paused - usable as a script/CI gate
+all-stop reset  --evidence killswitch.json --actor erik   # clears from either tripped or paused
 ```
 
 ## How the multi-process story actually works
@@ -68,11 +89,16 @@ network share, a synced folder) is the entire mechanism. Writes are atomic (temp
   negotiation. A webhook proxy or custom relay in front of one of those services won't match,
   and falls through to the generic structured-JSON shape — the safer default for anything
   unrecognized.
-- **This does not retrofit every product in the portfolio.** v0.1 wires into MCP Gateway only,
-  as the first proof the mechanism is worth having. Agent Guardrails, Probe Kit, and Decoy Kit
-  are natural next candidates, not yet done.
+- **This does not retrofit every product in the portfolio.** Wired into MCP Gateway's
+  `McpLifecycleGuard` and Iron-Thread's `EgressPolicy` (leviathan-platform + agent-guardrails)
+  as of 0.2. Probe Kit and Decoy Kit are natural next candidates, not yet done.
+- **`pause()` (0.2+) is a real, distinct, separately-audited state — not yet a real, distinct
+  enforcement policy.** Every current integration denies the same way while paused as while
+  tripped, because none of them has anywhere else to route a paused call. See the "Pause" section
+  above before assuming a customer's own tooling behaves differently under a pause than a trip -
+  today it doesn't, only the audit trail does.
 - **No dashboard, no event history, no aggregation across multiple kill-switch files.** Current
-  state only — `status` tells you what's true right now, not a timeline of past trips.
+  state only — `status` tells you what's true right now, not a timeline of past trips/pauses.
 
 ## Tests
 
