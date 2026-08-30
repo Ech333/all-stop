@@ -89,9 +89,12 @@ network share, a synced folder) is the entire mechanism. Writes are atomic (temp
   negotiation. A webhook proxy or custom relay in front of one of those services won't match,
   and falls through to the generic structured-JSON shape — the safer default for anything
   unrecognized.
-- **This does not retrofit every product in the portfolio.** Wired into MCP Gateway's
-  `McpLifecycleGuard` and Iron-Thread's `EgressPolicy` (leviathan-platform + agent-guardrails)
-  as of 0.2. Probe Kit and Decoy Kit are natural next candidates, not yet done.
+- **This does not retrofit every product in the portfolio - it retrofits the ones it makes sense
+  for.** Wired into MCP Gateway's `McpLifecycleGuard`, Iron-Thread's `EgressPolicy`
+  (leviathan-platform + agent-guardrails), Probe Kit's `run_suite()`, and Decoy Kit's `siem_webhook`
+  muting - every currently-shipped product in this portfolio that runs continuously or takes a
+  gateable action. Bait-Mask, Amber-Freeze, and TreeQuest are one-shot/on-demand tools without an
+  equivalent "org-wide mid-incident" scenario to gate, so they're not candidates, not an oversight.
 - **`pause()` (0.2+) is a real, distinct, separately-audited state — not yet a real, distinct
   enforcement policy.** Every current integration denies the same way while paused as while
   tripped, because none of them has anywhere else to route a paused call. See the "Pause" section
